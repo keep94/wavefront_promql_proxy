@@ -6,23 +6,26 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"net/url"
 	"os"
 	"strconv"
 	"strings"
 
+	"github.com/WavefrontHQ/go-wavefront-management-api"
 	"github.com/keep94/toolbox/http_util"
 )
 
 func main() {
-	wavefrontUrlStr := "https://" + os.Getenv("WAVEFRONT_ADDRESS") + "/api/v2/chart/api"
-	wavefrontUrl, err := url.Parse(wavefrontUrlStr)
+	client, err := wavefront.NewClient(
+		&wavefront.Config{
+			Address: os.Getenv("WAVEFRONT_ADDRESS"),
+			Token:   os.Getenv("WAVEFRONT_TOKEN"),
+		},
+	)
 	if err != nil {
 		log.Fatal(err)
 	}
 	http.Handle("/api/v1/query_range", &queryHandler{
-		WavefrontUrl: wavefrontUrl,
-		Token:        os.Getenv("WAVEFRONT_TOKEN"),
+		client: client,
 	})
 	if err := http.ListenAndServe(":9090", http.DefaultServeMux); err != nil {
 		fmt.Println(err)
@@ -30,9 +33,7 @@ func main() {
 }
 
 type queryHandler struct {
-	WavefrontUrl *url.URL
-	Token        string
-	client       http.Client
+	client *wavefront.Client
 }
 
 func (h *queryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -51,41 +52,24 @@ func (h *queryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	responseStr, httpStatusCode, err := h.SendToWavefront(wavefrontQuery)
+	wavefrontResult, err := h.SendToWavefront(wavefrontQuery)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	w.WriteHeader(httpStatusCode)
 
 	// TODO: convert from wavefront response to promQL response
-	io.Copy(w, strings.NewReader(responseStr))
+	io.Copy(w, strings.NewReader(fmt.Sprintf("%+v\n", wavefrontResult)))
 }
 
 func (h *queryHandler) SendToWavefront(query *wavefrontQuery) (
-	response string, httpStatusCode int, err error) {
-	wavefrontUrl := http_util.AppendParams(
-		h.WavefrontUrl,
-		"q", query.Q,
-		"s", query.S,
-		"e", query.E,
-		"g", query.G,
-		"strict", "true")
-	header := make(http.Header)
-	header.Add("Authorization", fmt.Sprintf("Bearer %s", h.Token))
-	req := &http.Request{
-		Method: "GET",
-		URL:    wavefrontUrl,
-		Header: header,
-	}
-	resp, err := h.client.Do(req)
-	if err != nil {
-		return "", 0, err
-	}
-	defer resp.Body.Close()
-	var builder strings.Builder
-	io.Copy(&builder, resp.Body)
-	return builder.String(), resp.StatusCode, nil
+	*wavefront.QueryResponse, error) {
+	qp := wavefront.NewQueryParams(query.Q)
+	qp.StartTime = query.S
+	qp.EndTime = query.E
+	qp.Granularity = query.G
+	q := h.client.NewQuery(qp)
+	return q.Execute()
 }
 
 func extractPromQL(r *http.Request) (*promQLQuery, error) {
