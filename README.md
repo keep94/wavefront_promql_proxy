@@ -9,4 +9,5 @@ environment variable to the API token. Then run the proxy server. The proxy
 server listens on port 9090. Currently it only handles query_range queries
 e.g (/api/v1/query_range).
 
-Simply send PromQL query requests to localhost:9090.
+Simply send PromQL query_range requests to
+http://localhost:9090/api/v1/query_range
