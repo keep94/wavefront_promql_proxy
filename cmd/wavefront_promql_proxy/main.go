@@ -57,9 +57,9 @@ func (h *queryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-
-	// TODO: convert from wavefront response to promQL response
-	io.Copy(w, strings.NewReader(fmt.Sprintf("%+v\n", wavefrontResult)))
+	promQLResult := convertFromWavefront(wavefrontResult)
+	encoder := json.NewEncoder(w)
+	encoder.Encode(&promQLResult)
 }
 
 func (h *queryHandler) SendToWavefront(query *wavefrontQuery) (
@@ -123,6 +123,40 @@ func convertToWavefront(query *promQLQuery) (*wavefrontQuery, error) {
 	}, nil
 }
 
+func convertFromWavefront(response *wavefront.QueryResponse) *promQLResponse {
+	var result promQLResponse
+	result.Status = "success"
+	result.Data.ResultType = "matrix"
+	result.Data.Result = make([]promQLTimeSeries, len(response.TimeSeries))
+	for i := range response.TimeSeries {
+		result.Data.Result[i].Metric = extractPromQLMetric(&response.TimeSeries[i])
+		result.Data.Result[i].Values = extractPromQLData(response.TimeSeries[i].DataPoints)
+	}
+	return &result
+}
+
+func extractPromQLMetric(t *wavefront.TimeSeries) map[string]string {
+	result := make(map[string]string)
+	result["__name__"] = t.Label
+
+	// TODO: If there is a "host" tag, this will get clobbered
+	result["host"] = t.Host
+
+	for k, v := range t.Tags {
+		result[k] = v
+	}
+	return result
+}
+
+func extractPromQLData(data []wavefront.DataPoint) [][2]interface{} {
+	result := make([][2]interface{}, len(data))
+	for i := range data {
+		result[i][0] = data[i][0]
+		result[i][1] = strconv.FormatFloat(data[i][1], 'g', -1, 64)
+	}
+	return result
+}
+
 type promQLQuery struct {
 	Start float64
 	End   float64
@@ -135,6 +169,21 @@ type wavefrontQuery struct {
 	S string
 	E string
 	G string
+}
+
+type promQLResponse struct {
+	Data   promQLData `json:"data"`
+	Status string     `json:"status"`
+}
+
+type promQLData struct {
+	Result     []promQLTimeSeries `json:"result"`
+	ResultType string             `json:"resultType"`
+}
+
+type promQLTimeSeries struct {
+	Metric map[string]string `json:"metric"`
+	Values [][2]interface{}  `json:"values"`
 }
 
 type promQLError struct {
