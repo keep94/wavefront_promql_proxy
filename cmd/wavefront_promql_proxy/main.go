@@ -57,7 +57,11 @@ func (h *queryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	promQLResult := convertFromWavefront(wavefrontResult)
+	promQLResult, err := convertFromWavefront(wavefrontResult)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
 	encoder := json.NewEncoder(w)
 	encoder.Encode(&promQLResult)
 }
@@ -123,7 +127,11 @@ func convertToWavefront(query *promQLQuery) (*wavefrontQuery, error) {
 	}, nil
 }
 
-func convertFromWavefront(response *wavefront.QueryResponse) *promQLResponse {
+func convertFromWavefront(response *wavefront.QueryResponse) (
+	*promQLResponse, error) {
+	if response.ErrType != "" {
+		return nil, newBadDataPromQLError(response.ErrMessage)
+	}
 	var result promQLResponse
 	result.Status = "success"
 	result.Data.ResultType = "matrix"
@@ -132,16 +140,18 @@ func convertFromWavefront(response *wavefront.QueryResponse) *promQLResponse {
 		result.Data.Result[i].Metric = extractPromQLMetric(&response.TimeSeries[i])
 		result.Data.Result[i].Values = extractPromQLData(response.TimeSeries[i].DataPoints)
 	}
-	return &result
+	return &result, nil
 }
 
 func extractPromQLMetric(t *wavefront.TimeSeries) map[string]string {
 	result := make(map[string]string)
-	result["__name__"] = t.Label
-
-	// TODO: If there is a "host" tag, this will get clobbered
-	result["host"] = t.Host
-
+	if t.Label != "" {
+		result["__name__"] = t.Label
+	}
+	if t.Host != "" {
+		// TODO: If there is a "host" tag, this will get clobbered
+		result["host"] = t.Host
+	}
 	for k, v := range t.Tags {
 		result[k] = v
 	}
