@@ -125,7 +125,13 @@ func writeError(w http.ResponseWriter, err error) {
 }
 
 func convertToWavefront(query *promQLQuery) (*wavefrontQuery, error) {
-	s := strconv.FormatInt(int64(query.Start*1000), 10)
+
+	// We set the wavefront start time to be 15s before the promQL start time.
+	// We do this because otherwise, the first Wavefront data point may be
+	// after start time, and we won't get the correct value for start time.
+	// This isn't perfect as there is no guarantee that going 15s back is
+	// sufficient.
+	s := strconv.FormatInt(int64((query.Start-15.0)*1000), 10)
 
 	// In promQL, end time is inclusive, but in Wavefront it is exclusive.
 	// In wavefront times have to be at 1000ms less than end time.
@@ -191,15 +197,18 @@ func extractPromQLData(
 		return make([][2]interface{}, 0)
 	}
 	resultSize := int((query.End-query.Start)/query.Step) + 1
-	result := make([][2]interface{}, resultSize)
+	var result [][2]interface{}
 	indexPlus1 := 1
 	for i := 0; i < resultSize; i++ {
 		timestamp := query.Start + float64(i)*query.Step
 		for indexPlus1 < len(data) && data[indexPlus1][0] <= timestamp {
 			indexPlus1++
 		}
-		result[i][0] = timestamp
-		result[i][1] = floatToString(data[indexPlus1-1][1])
+		timestampdiff := timestamp - data[indexPlus1-1][0]
+		if timestampdiff >= 0 && timestampdiff < query.Step {
+			result = append(result, [2]interface{}{
+				timestamp, floatToString(data[indexPlus1-1][1])})
+		}
 	}
 	return result
 }
