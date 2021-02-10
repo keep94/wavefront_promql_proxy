@@ -57,7 +57,7 @@ func (h *queryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	promQLResult, err := convertFromWavefront(wavefrontResult)
+	promQLResult, err := convertFromWavefront(wavefrontResult, promQL)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -95,6 +95,14 @@ func extractPromQL(r *http.Request) (*promQLQuery, error) {
 		return nil, newBadDataPromQLError(
 			fmt.Sprintf("invalid parameter 'step': cannot parse \"%s\" to a valid duration", stepStr))
 	}
+	if step <= 0.0 {
+		return nil, newBadDataPromQLError(
+			"zero or negative query resolution step widths are not accepted. Try a positive integer")
+	}
+	if end < start {
+		return nil, newBadDataPromQLError(
+			"end timestamp must not be before start time")
+	}
 	return &promQLQuery{
 		Start: start,
 		End:   end,
@@ -118,7 +126,14 @@ func writeError(w http.ResponseWriter, err error) {
 
 func convertToWavefront(query *promQLQuery) (*wavefrontQuery, error) {
 	s := strconv.FormatInt(int64(query.Start*1000), 10)
-	e := strconv.FormatInt(int64(query.End*1000), 10)
+
+	// In promQL, end time is inclusive, but in Wavefront it is exclusive.
+	// In wavefront times have to be at 1000ms less than end time.
+	e := strconv.FormatInt(int64((query.End+1.0)*1000), 10)
+
+	// Here we set g=s to get a step of one second from wavefront. Later
+	// we will apply the step parameter from promQL when converting the
+	// response back to promQL.
 	return &wavefrontQuery{
 		Q: query.Query,
 		S: s,
@@ -127,7 +142,8 @@ func convertToWavefront(query *promQLQuery) (*wavefrontQuery, error) {
 	}, nil
 }
 
-func convertFromWavefront(response *wavefront.QueryResponse) (
+func convertFromWavefront(
+	response *wavefront.QueryResponse, query *promQLQuery) (
 	*promQLResponse, error) {
 	if response.ErrType != "" {
 		return nil, newBadDataPromQLError(response.ErrMessage)
@@ -138,7 +154,8 @@ func convertFromWavefront(response *wavefront.QueryResponse) (
 	result.Data.Result = make([]promQLTimeSeries, len(response.TimeSeries))
 	for i := range response.TimeSeries {
 		result.Data.Result[i].Metric = extractPromQLMetric(&response.TimeSeries[i])
-		result.Data.Result[i].Values = extractPromQLData(response.TimeSeries[i].DataPoints)
+		result.Data.Result[i].Values = extractPromQLData(
+			response.TimeSeries[i].DataPoints, query)
 	}
 	return &result, nil
 }
@@ -149,8 +166,8 @@ func extractPromQLMetric(t *wavefront.TimeSeries) map[string]string {
 		result["__name__"] = t.Label
 	}
 	if t.Host != "" {
-		// TODO: If there is a "host" tag, this will get clobbered
-		result["host"] = t.Host
+		// TODO: If there is a "instance" tag, this will get clobbered
+		result["instance"] = t.Host
 	}
 	for k, v := range t.Tags {
 		result[k] = v
@@ -158,11 +175,31 @@ func extractPromQLMetric(t *wavefront.TimeSeries) map[string]string {
 	return result
 }
 
-func extractPromQLData(data []wavefront.DataPoint) [][2]interface{} {
-	result := make([][2]interface{}, len(data))
-	for i := range data {
-		result[i][0] = data[i][0]
-		result[i][1] = strconv.FormatFloat(data[i][1], 'g', -1, 64)
+func floatToString(x float64) string {
+	return strconv.FormatFloat(x, 'g', -1, 64)
+}
+
+// Here we are trying to simulate the step functionality of promQL. While
+// this code works most of the time, it is not perfect because the
+// wavefront data itself has granularity of 1s, 5s, or whatever. It really
+// isn't possible to tell what the value is at an arbitrary time. What we
+// do here, is we just assume that the last reported data value is correct,
+// but this may or may not be the case.
+func extractPromQLData(
+	data []wavefront.DataPoint, query *promQLQuery) [][2]interface{} {
+	if len(data) == 0 {
+		return make([][2]interface{}, 0)
+	}
+	resultSize := int((query.End-query.Start)/query.Step) + 1
+	result := make([][2]interface{}, resultSize)
+	indexPlus1 := 1
+	for i := 0; i < resultSize; i++ {
+		timestamp := query.Start + float64(i)*query.Step
+		for indexPlus1 < len(data) && data[indexPlus1][0] <= timestamp {
+			indexPlus1++
+		}
+		result[i][0] = timestamp
+		result[i][1] = floatToString(data[indexPlus1-1][1])
 	}
 	return result
 }
