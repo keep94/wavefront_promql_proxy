@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -14,7 +15,12 @@ import (
 	"github.com/keep94/toolbox/http_util"
 )
 
+var (
+	fPort string
+)
+
 func main() {
+	flag.Parse()
 	client, err := wavefront.NewClient(
 		&wavefront.Config{
 			Address: os.Getenv("WAVEFRONT_ADDRESS"),
@@ -27,7 +33,7 @@ func main() {
 	http.Handle("/api/v1/query_range", &queryHandler{
 		client: client,
 	})
-	if err := http.ListenAndServe(":9090", http.DefaultServeMux); err != nil {
+	if err := http.ListenAndServe(fPort, http.DefaultServeMux); err != nil {
 		fmt.Println(err)
 	}
 }
@@ -254,4 +260,8 @@ func (p *promQLError) Error() string {
 		return err.Error()
 	}
 	return string(jsonBytes)
+}
+
+func init() {
+	flag.StringVar(&fPort, "http", ":9090", "Port to bind")
 }
