@@ -4,5 +4,5 @@ go 1.14
 
 require (
 	github.com/WavefrontHQ/go-wavefront-management-api v1.14.2
-	github.com/keep94/toolbox v0.2.0
+	github.com/keep94/toolbox v0.4.1
 )
