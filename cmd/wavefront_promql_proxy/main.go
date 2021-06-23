@@ -10,6 +10,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/WavefrontHQ/go-wavefront-management-api"
 	"github.com/keep94/toolbox/http_util"
@@ -17,6 +18,7 @@ import (
 
 var (
 	fPort string
+	fSkew time.Duration
 )
 
 func main() {
@@ -32,6 +34,7 @@ func main() {
 	}
 	http.Handle("/api/v1/query_range", &queryHandler{
 		client: client,
+		skew:   fSkew,
 	})
 	if err := http.ListenAndServe(fPort, http.DefaultServeMux); err != nil {
 		fmt.Println(err)
@@ -40,6 +43,7 @@ func main() {
 
 type queryHandler struct {
 	client *wavefront.Client
+	skew   time.Duration
 }
 
 func (h *queryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -53,12 +57,12 @@ func (h *queryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	wavefrontQuery, err := convertToWavefront(promQL)
+	wavefrontQuery, err := h.convertToWavefrontAndSkewEarlier(promQL)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	wavefrontResult, err := h.SendToWavefront(wavefrontQuery)
+	wavefrontResult, err := h.sendToWavefrontAndSkewLater(wavefrontQuery)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -72,14 +76,58 @@ func (h *queryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	encoder.Encode(&promQLResult)
 }
 
-func (h *queryHandler) SendToWavefront(query *wavefrontQuery) (
+func (h *queryHandler) convertToWavefrontAndSkewEarlier(
+	query *promQLQuery) (*wavefrontQuery, error) {
+
+	skew := float64(h.skew) / float64(time.Second)
+
+	// We set the wavefront start time to be 15s before the promQL start time.
+	// We do this because otherwise, the first Wavefront data point may be
+	// after start time, and we won't get the correct value for start time.
+	// This isn't perfect as there is no guarantee that going 15s back is
+	// sufficient.
+	s := strconv.FormatInt(int64((query.Start-15.0-skew)*1000), 10)
+
+	// In promQL, end time is inclusive, but in Wavefront it is exclusive.
+	// In wavefront times have to be at 1000ms less than end time.
+	e := strconv.FormatInt(int64((query.End+1.0-skew)*1000), 10)
+
+	// Here we set g=s to get a step of one second from wavefront. Later
+	// we will apply the step parameter from promQL when converting the
+	// response back to promQL.
+	return &wavefrontQuery{
+		Q: query.Query,
+		S: s,
+		E: e,
+		G: "s",
+	}, nil
+}
+
+func (h *queryHandler) sendToWavefrontAndSkewLater(query *wavefrontQuery) (
 	*wavefront.QueryResponse, error) {
 	qp := wavefront.NewQueryParams(query.Q)
 	qp.StartTime = query.S
 	qp.EndTime = query.E
 	qp.Granularity = query.G
 	q := h.client.NewQuery(qp)
-	return q.Execute()
+	response, err := q.Execute()
+	if err != nil {
+		return nil, err
+	}
+	return h.skewLater(response), nil
+}
+
+func (h *queryHandler) skewLater(
+	response *wavefront.QueryResponse) *wavefront.QueryResponse {
+
+	skew := float64(h.skew) / float64(time.Second)
+
+	for i := range response.TimeSeries {
+		for j := range response.TimeSeries[i].DataPoints {
+			response.TimeSeries[i].DataPoints[j][0] += skew
+		}
+	}
+	return response
 }
 
 func extractPromQL(r *http.Request) (*promQLQuery, error) {
@@ -128,30 +176,6 @@ func newBadDataPromQLError(str string) *promQLError {
 func writeError(w http.ResponseWriter, err error) {
 	w.WriteHeader(400)
 	io.Copy(w, strings.NewReader(err.Error()))
-}
-
-func convertToWavefront(query *promQLQuery) (*wavefrontQuery, error) {
-
-	// We set the wavefront start time to be 15s before the promQL start time.
-	// We do this because otherwise, the first Wavefront data point may be
-	// after start time, and we won't get the correct value for start time.
-	// This isn't perfect as there is no guarantee that going 15s back is
-	// sufficient.
-	s := strconv.FormatInt(int64((query.Start-15.0)*1000), 10)
-
-	// In promQL, end time is inclusive, but in Wavefront it is exclusive.
-	// In wavefront times have to be at 1000ms less than end time.
-	e := strconv.FormatInt(int64((query.End+1.0)*1000), 10)
-
-	// Here we set g=s to get a step of one second from wavefront. Later
-	// we will apply the step parameter from promQL when converting the
-	// response back to promQL.
-	return &wavefrontQuery{
-		Q: query.Query,
-		S: s,
-		E: e,
-		G: "s",
-	}, nil
 }
 
 func convertFromWavefront(
@@ -264,4 +288,5 @@ func (p *promQLError) Error() string {
 
 func init() {
 	flag.StringVar(&fPort, "http", ":9090", "Port to bind")
+	flag.DurationVar(&fSkew, "skew", time.Second, "Amount of time wavefront is earlier")
 }
