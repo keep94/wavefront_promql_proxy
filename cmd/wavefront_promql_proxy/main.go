@@ -47,7 +47,7 @@ type queryHandler struct {
 }
 
 func (h *queryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" {
+	if r.Method != "GET" && r.Method != "POST" {
 		http_util.Error(w, http.StatusMethodNotAllowed)
 		return
 	}
