@@ -3,6 +3,11 @@ wavefront_promql_proxy
 
 A proxy server that sits between a Wavefront server and a PromQL client.
 
+To build the tool:
+```sh
+$ go build ./cmd/wavefront_promql_proxy
+```
+
 To use the proxy, set WAVEFRONT_ADDRESS environment variable to the address
 of the Wavefront server, e.g test.wavefront.com. Set the WAVEFRONT_TOKEN
 environment variable to the API token. Then run the proxy server. The proxy
