@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -193,6 +194,7 @@ func convertFromWavefront(
 		result.Data.Result[i].Values = extractPromQLData(
 			response.TimeSeries[i].DataPoints, query)
 	}
+	sortTimeSeriesInPlace(result.Data.Result)
 	return &result, nil
 }
 
@@ -284,6 +286,64 @@ func (p *promQLError) Error() string {
 		return err.Error()
 	}
 	return string(jsonBytes)
+}
+
+func sortTimeSeriesInPlace(timeSeries []promQLTimeSeries) {
+	sorter := promQLTimeSeriesSorter{timeSeries: timeSeries}
+	sorter.initialize()
+	sort.Sort(&sorter)
+}
+
+type promQLTimeSeriesSorter struct {
+	timeSeries      []promQLTimeSeries
+	metricKeyValues [][]string
+}
+
+func (p *promQLTimeSeriesSorter) initialize() {
+	p.metricKeyValues = make([][]string, len(p.timeSeries))
+	for i := range p.timeSeries {
+		p.metricKeyValues[i] = metricMapToSlice(p.timeSeries[i].Metric)
+	}
+}
+
+func (p *promQLTimeSeriesSorter) Less(i, j int) bool {
+	return sliceLess(p.metricKeyValues[i], p.metricKeyValues[j])
+}
+
+func (p *promQLTimeSeriesSorter) Swap(i, j int) {
+	p.metricKeyValues[i], p.metricKeyValues[j] = p.metricKeyValues[j], p.metricKeyValues[i]
+	p.timeSeries[i], p.timeSeries[j] = p.timeSeries[j], p.timeSeries[i]
+}
+
+func (p *promQLTimeSeriesSorter) Len() int {
+	return len(p.timeSeries)
+}
+
+func metricMapToSlice(metric map[string]string) []string {
+	keys := make([]string, 0, len(metric))
+	for key := range metric {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	result := make([]string, 0, 2*len(metric))
+	for _, key := range keys {
+		result = append(result, key, metric[key])
+	}
+	return result
+}
+
+func sliceLess(lhs, rhs []string) bool {
+	i := 0
+	for i < len(lhs) && i < len(rhs) {
+		if lhs[i] < rhs[i] {
+			return true
+		}
+		if lhs[i] > rhs[i] {
+			return false
+		}
+		i++
+	}
+	return len(lhs) < len(rhs)
 }
 
 func init() {
