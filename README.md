@@ -17,4 +17,4 @@ e.g (/api/v1/query_range).
 Simply send PromQL query_range requests to
 http://localhost:9090/api/v1/query_range
 
-[go CI](https://github.com/keep94/wavefront_promql_proxy/actions/workflows/go.yml/badge.svg)
+![go CI](https://github.com/keep94/wavefront_promql_proxy/actions/workflows/go.yml/badge.svg)
