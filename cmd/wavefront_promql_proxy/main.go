@@ -24,6 +24,7 @@ var (
 
 func main() {
 	flag.Parse()
+	four = 4
 	client, err := wavefront.NewClient(
 		&wavefront.Config{
 			Address: os.Getenv("WAVEFRONT_ADDRESS"),
