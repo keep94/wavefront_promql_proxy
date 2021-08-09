@@ -348,5 +348,5 @@ func sliceLess(lhs, rhs []string) bool {
 
 func init() {
 	flag.StringVar(&fPort, "http", ":9090", "Port to bind")
-	flag.DurationVar(&fSkew, "skew", time.Second, "Amount of time wavefront is earlier")
+	flag.DurationVar(&fSkew, "skew", 0, "Amount of time wavefront is earlier")
 }
