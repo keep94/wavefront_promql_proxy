@@ -23,7 +23,7 @@ var (
 )
 
 func main() {
-	flag.Parse()
+    flag.Parse()
 	client, err := wavefront.NewClient(
 		&wavefront.Config{
 			Address: os.Getenv("WAVEFRONT_ADDRESS"),
